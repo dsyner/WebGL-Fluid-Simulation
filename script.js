@@ -761,6 +761,32 @@ const gradientSubtractShader = compileShader(gl.FRAGMENT_SHADER, `
     }
 `);
 
+const velocitySubtractShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    precision mediump sampler2D;
+
+    varying highp vec2 vUv;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uVelocityAdvected;
+
+    void main () {
+        vec2 velocity = texture2D(uVelocity, vUv).xy;
+        vec2 velocityAdvected = texture2D(uVelocityAdvected, vUv).xy;
+        gl_FragColor = vec4(2.0 * velocity - velocityAdvected, 0.0, 1.0);
+    }
+`);
+
+const copyShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision mediump sampler2D;
+
+    varying highp vec2 vUv;
+    uniform sampler2D uTexture;
+
+    void main () {
+        gl_FragColor = texture2D(uTexture, vUv);
+    }
+`);
+
 const blit = (() => {
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1]), gl.STATIC_DRAW);
@@ -781,6 +807,7 @@ let dyeWidth;
 let dyeHeight;
 let density;
 let velocity;
+let velocity_advected;
 let divergence;
 let curl;
 let pressure;
@@ -805,6 +832,8 @@ const curlProgram                = new GLProgram(baseVertexShader, curlShader);
 const vorticityProgram           = new GLProgram(baseVertexShader, vorticityShader);
 const pressureProgram            = new GLProgram(baseVertexShader, pressureShader);
 const gradienSubtractProgram     = new GLProgram(baseVertexShader, gradientSubtractShader);
+const velocitySubtractProgram     = new GLProgram(baseVertexShader, velocitySubtractShader);
+const copyProgram                = new GLProgram(baseVertexShader, copyShader);
 
 function initFramebuffers () {
     let simRes = getResolution(config.SIM_RESOLUTION);
@@ -831,9 +860,14 @@ function initFramebuffers () {
     else
         velocity = resizeDoubleFBO(velocity, simWidth, simHeight, rg.internalFormat, rg.format, texType, filtering);
 
-    divergence = createFBO      (simWidth, simHeight, r.internalFormat, r.format, texType, gl.NEAREST);
-    curl       = createFBO      (simWidth, simHeight, r.internalFormat, r.format, texType, gl.NEAREST);
-    pressure   = createDoubleFBO(simWidth, simHeight, r.internalFormat, r.format, texType, gl.NEAREST);
+    if (velocity == null)
+        velocity_advected = createDoubleFBO(simWidth, simHeight, rg.internalFormat, rg.format, texType, filtering);
+    else
+        velocity_advected = resizeDoubleFBO(velocity, simWidth, simHeight, rg.internalFormat, rg.format, texType, filtering);
+    
+    divergence          = createFBO(simWidth, simHeight, r.internalFormat, r.format, texType, gl.NEAREST);
+    curl                = createFBO(simWidth, simHeight, r.internalFormat, r.format, texType, gl.NEAREST);
+    pressure            = createDoubleFBO(simWidth, simHeight, r.internalFormat, r.format, texType, gl.NEAREST);
 
     initBloomFramebuffers();
 }
@@ -1004,23 +1038,25 @@ function input () {
 
 function step (dt) {
     gl.disable(gl.BLEND);
-
     gl.viewport(0, 0, simWidth, simHeight);
 
-    advectionProgram.bind();
-    gl.uniform2f(advectionProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
-    if (!ext.supportLinearFiltering)
-        gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, 1.0 / simWidth, 1.0 / simHeight);
-    let velocityId = velocity.read.attach(0);
-    gl.uniform1i(advectionProgram.uniforms.uVelocity, velocityId);
-    gl.uniform1i(advectionProgram.uniforms.uSource, velocityId);
-    gl.uniform1f(advectionProgram.uniforms.dt, dt);
-    gl.uniform1f(advectionProgram.uniforms.dissipation, config.VELOCITY_DISSIPATION);
-    blit(velocity.write.fbo);
-    velocity.swap();
+    // Advection
+    {
+        advectionProgram.bind();
+        gl.uniform2f(advectionProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+        if (!ext.supportLinearFiltering)
+            gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, 1.0 / simWidth, 1.0 / simHeight);
+        let velocityId = velocity.read.attach(0);
+        gl.uniform1i(advectionProgram.uniforms.uVelocity, velocityId);
+        gl.uniform1i(advectionProgram.uniforms.uSource, velocityId);
+        gl.uniform1f(advectionProgram.uniforms.dt, dt);
+        gl.uniform1f(advectionProgram.uniforms.dissipation, config.VELOCITY_DISSIPATION);
+        blit(velocity.write.fbo);
+        velocity.swap();
+    }
 
     gl.viewport(0, 0, dyeWidth, dyeHeight);
-
+    advectionProgram.bind();
     if (!ext.supportLinearFiltering)
         gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, 1.0 / dyeWidth, 1.0 / dyeHeight);
     gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
@@ -1031,46 +1067,108 @@ function step (dt) {
 
     gl.viewport(0, 0, simWidth, simHeight);
 
-    // curlProgram.bind();
-    // gl.uniform2f(curlProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
-    // gl.uniform1i(curlProgram.uniforms.uVelocity, velocity.read.attach(0));
-    // blit(curl.fbo);
+    curlProgram.bind();
+    gl.uniform2f(curlProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+    gl.uniform1i(curlProgram.uniforms.uVelocity, velocity.read.attach(0));
+    blit(curl.fbo);
 
-    // vorticityProgram.bind();
-    // gl.uniform2f(vorticityProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
-    // gl.uniform1i(vorticityProgram.uniforms.uVelocity, velocity.read.attach(0));
-    // gl.uniform1i(vorticityProgram.uniforms.uCurl, curl.attach(1));
-    // gl.uniform1f(vorticityProgram.uniforms.curl, config.CURL);
-    // gl.uniform1f(vorticityProgram.uniforms.dt, dt);
-    // blit(velocity.write.fbo);
-    // velocity.swap();
-
-    divergenceProgram.bind();
-    gl.uniform2f(divergenceProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
-    gl.uniform1i(divergenceProgram.uniforms.uVelocity, velocity.read.attach(0));
-    blit(divergence.fbo);
-
-    clearProgram.bind();
-    gl.uniform1i(clearProgram.uniforms.uTexture, pressure.read.attach(0));
-    gl.uniform1f(clearProgram.uniforms.value, config.PRESSURE_DISSIPATION);
-    blit(pressure.write.fbo);
-    pressure.swap();
-
-    pressureProgram.bind();
-    gl.uniform2f(pressureProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
-    gl.uniform1i(pressureProgram.uniforms.uDivergence, divergence.attach(0));
-    for (let i = 0; i < config.PRESSURE_ITERATIONS; i++) {
-        gl.uniform1i(pressureProgram.uniforms.uPressure, pressure.read.attach(1));
-        blit(pressure.write.fbo);
-        pressure.swap();
-    }
-
-    gradienSubtractProgram.bind();
-    gl.uniform2f(gradienSubtractProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
-    gl.uniform1i(gradienSubtractProgram.uniforms.uPressure, pressure.read.attach(0));
-    gl.uniform1i(gradienSubtractProgram.uniforms.uVelocity, velocity.read.attach(1));
+    vorticityProgram.bind();
+    gl.uniform2f(vorticityProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+    gl.uniform1i(vorticityProgram.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(vorticityProgram.uniforms.uCurl, curl.attach(1));
+    gl.uniform1f(vorticityProgram.uniforms.curl, config.CURL);
+    gl.uniform1f(vorticityProgram.uniforms.dt, dt);
     blit(velocity.write.fbo);
     velocity.swap();
+
+    // Copy
+    copyProgram.bind();
+    gl.uniform1i(advectionProgram.uniforms.uTexture, velocity.read.attach(0));
+    blit(velocity_advected.write.fbo);
+    velocity_advected.swap();
+
+    // Projection
+    {
+        divergenceProgram.bind();
+        gl.uniform2f(divergenceProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+        gl.uniform1i(divergenceProgram.uniforms.uVelocity, velocity.read.attach(0));
+        blit(divergence.fbo);
+
+        clearProgram.bind();
+        gl.uniform1i(clearProgram.uniforms.uTexture, pressure.read.attach(0));
+        gl.uniform1f(clearProgram.uniforms.value, config.PRESSURE_DISSIPATION);
+        blit(pressure.write.fbo);
+        pressure.swap();
+
+        pressureProgram.bind();
+        gl.uniform2f(pressureProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+        gl.uniform1i(pressureProgram.uniforms.uDivergence, divergence.attach(0));
+        for (let i = 0; i < config.PRESSURE_ITERATIONS; i++) {
+            gl.uniform1i(pressureProgram.uniforms.uPressure, pressure.read.attach(1));
+            blit(pressure.write.fbo);
+            pressure.swap();
+        }
+
+        gradienSubtractProgram.bind();
+        gl.uniform2f(gradienSubtractProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+        gl.uniform1i(gradienSubtractProgram.uniforms.uPressure, pressure.read.attach(0));
+        gl.uniform1i(gradienSubtractProgram.uniforms.uVelocity, velocity.read.attach(1));
+        blit(velocity.write.fbo);
+        velocity.swap();
+    }
+
+    // // Reflection
+    // {
+    //     velocitySubtractProgram.bind();
+    //     gl.uniform1i(velocitySubtractProgram.uniforms.uVelocity, velocity.read.attach(0));
+    //     gl.uniform1i(velocitySubtractProgram.uniforms.uVelocityAdvected, velocity_advected.read.attach(1));
+    //     blit(velocity_advected.write.fbo);
+    //     velocity_advected.swap();
+    // }
+
+    // // Advection
+    // {
+    //     advectionProgram.bind();
+    //     gl.uniform2f(advectionProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+    //     if (!ext.supportLinearFiltering)
+    //         gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, 1.0 / simWidth, 1.0 / simHeight);
+    //     gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
+    //     gl.uniform1i(advectionProgram.uniforms.uSource, velocity_advected.read.attach(1));
+    //     gl.uniform1f(advectionProgram.uniforms.dt, dt);
+    //     gl.uniform1f(advectionProgram.uniforms.dissipation, config.VELOCITY_DISSIPATION);
+    //     blit(velocity.write.fbo);
+    //     velocity.swap();
+    // }
+
+    // // Projection
+    // {
+    //     divergenceProgram.bind();
+    //     gl.uniform2f(divergenceProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+    //     gl.uniform1i(divergenceProgram.uniforms.uVelocity, velocity.read.attach(0));
+    //     blit(divergence.fbo);
+    
+    //     clearProgram.bind();
+    //     gl.uniform1i(clearProgram.uniforms.uTexture, pressure.read.attach(0));
+    //     gl.uniform1f(clearProgram.uniforms.value, config.PRESSURE_DISSIPATION);
+    //     blit(pressure.write.fbo);
+    //     pressure.swap();
+    
+    //     pressureProgram.bind();
+    //     gl.uniform2f(pressureProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+    //     gl.uniform1i(pressureProgram.uniforms.uDivergence, divergence.attach(0));
+    //     for (let i = 0; i < config.PRESSURE_ITERATIONS; i++) {
+    //         gl.uniform1i(pressureProgram.uniforms.uPressure, pressure.read.attach(1));
+    //         blit(pressure.write.fbo);
+    //         pressure.swap();
+    //     }
+    
+    //     gradienSubtractProgram.bind();
+    //     gl.uniform2f(gradienSubtractProgram.uniforms.texelSize, 1.0 / simWidth, 1.0 / simHeight);
+    //     gl.uniform1i(gradienSubtractProgram.uniforms.uPressure, pressure.read.attach(0));
+    //     gl.uniform1i(gradienSubtractProgram.uniforms.uVelocity, velocity.read.attach(1));
+    //     blit(velocity.write.fbo);
+    //     velocity.swap();
+    // }
 }
 
 function render (target) {
