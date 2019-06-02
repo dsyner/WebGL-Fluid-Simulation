@@ -6,14 +6,14 @@ canvas.height = canvas.clientHeight;
 
 let config = {
     REFLECTION: true,
-    SIM_RESOLUTION: 128,
-    DYE_RESOLUTION: 512,
-    DENSITY_DISSIPATION: 0.97,
+    SIM_RESOLUTION: 256,
+    DYE_RESOLUTION: 256,
+    DENSITY_DISSIPATION: 0.999,
     VELOCITY_DISSIPATION: 1.0,
     PRESSURE_DISSIPATION: 1.0,
-    PRESSURE_ITERATIONS: 200,
+    PRESSURE_ITERATIONS: 500,
     CURL: 0,
-    SPLAT_RADIUS: 0.5,
+    SPLAT_RADIUS: 0.1,
     SHADING: false,
     COLORFUL: false,
     PAUSED: false,
@@ -1013,8 +1013,8 @@ function update () {
     resizeCanvas();
     input();
     
-    if (config.REFLECTION)
-        dt *= 0.5;
+    // if (config.REFLECTION)
+    //     dt *= 0.5;
 
     if (!config.PAUSED)
         step(dt);
