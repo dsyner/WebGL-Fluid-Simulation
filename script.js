@@ -6,14 +6,14 @@ canvas.height = canvas.clientHeight;
 
 let config = {
     REFLECTION: true,
-    SIM_RESOLUTION: 256,
-    DYE_RESOLUTION: 256,
-    DENSITY_DISSIPATION: 0.999,
+    SIM_RESOLUTION: 512,
+    DYE_RESOLUTION: 512,
+    DENSITY_DISSIPATION: 1.0,
     VELOCITY_DISSIPATION: 1.0,
     PRESSURE_DISSIPATION: 1.0,
     PRESSURE_ITERATIONS: 500,
     CURL: 0,
-    SPLAT_RADIUS: 0.1,
+    SPLAT_RADIUS: 0.01,
     SHADING: false,
     COLORFUL: false,
     PAUSED: false,
@@ -566,7 +566,11 @@ const splatShader = compileShader(gl.FRAGMENT_SHADER, `
     void main () {
         vec2 p = vUv - point.xy;
         p.x *= aspectRatio;
-        vec3 splat = exp(-dot(p, p) / radius) * color;
+        vec3 splat = vec3(0,0,0);
+        if (dot(p, p) < radius)
+        {
+            splat = color;
+        }
         vec3 base = texture2D(uTarget, vUv).xyz;
         gl_FragColor = vec4(base + splat, 1.0);
     }
@@ -998,11 +1002,12 @@ function createTextureAsync (url) {
 }
 
 initFramebuffers();
-multipleSplats(parseInt(Math.random() * 20) + 5);
+// multipleSplats(parseInt(20) + 5);
 
 let lastColorChangeTime = Date.now();
 let lastFrameTime = Date.now();
 
+let a = 0;
 update();
 
 function update () {
@@ -1011,11 +1016,13 @@ function update () {
     lastFrameTime = currentFrameTime;
 
     resizeCanvas();
-    input();
-    
+    splat(canvas.width * 0.2, 100, 10, -30, HSVtoRGB(a, 1.0, 1.0));
+    // splat(100, canvas.height * 0.2, 30, 10, HSVtoRGB(a, 1.0, 1.0));
+    a += 0.001;
     // if (config.REFLECTION)
     //     dt *= 0.5;
 
+    dt = 0.002;
     if (!config.PAUSED)
         step(dt);
     render(null);
@@ -1029,7 +1036,7 @@ function input () {
     for (let i = 0; i < pointers.length; i++) {
         const p = pointers[i];
         if (p.moved) {
-            splat(p.x, p.y, p.dx, p.dy, p.color);
+            splat(p.x, p.y, p.dx, p.dy, 0);
             p.moved = false;
         }
     }
@@ -1045,6 +1052,7 @@ function input () {
             p.color = generateColor();
         }
     }
+
 }
 
 function step (dt) {
@@ -1065,16 +1073,6 @@ function step (dt) {
         blit(velocity.write.fbo);
         velocity.swap();
     }
-
-    gl.viewport(0, 0, dyeWidth, dyeHeight);
-    advectionProgram.bind();
-    if (!ext.supportLinearFiltering)
-        gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, 1.0 / dyeWidth, 1.0 / dyeHeight);
-    gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
-    gl.uniform1i(advectionProgram.uniforms.uSource, density.read.attach(1));
-    gl.uniform1f(advectionProgram.uniforms.dissipation, config.DENSITY_DISSIPATION);
-    blit(density.write.fbo);
-    density.swap();
 
     gl.viewport(0, 0, simWidth, simHeight);
 
@@ -1183,6 +1181,16 @@ function step (dt) {
             velocity.swap();
         }
     }
+
+    gl.viewport(0, 0, dyeWidth, dyeHeight);
+    advectionProgram.bind();
+    if (!ext.supportLinearFiltering)
+        gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, 1.0 / dyeWidth, 1.0 / dyeHeight);
+    gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(advectionProgram.uniforms.uSource, density.read.attach(1));
+    gl.uniform1f(advectionProgram.uniforms.dissipation, config.DENSITY_DISSIPATION);
+    blit(density.write.fbo);
+    density.swap();
 }
 
 function render (target) {
@@ -1302,11 +1310,14 @@ function splat (x, y, dx, dy, color) {
     blit(velocity.write.fbo);
     velocity.swap();
 
-    gl.viewport(0, 0, dyeWidth, dyeHeight);
-    gl.uniform1i(splatProgram.uniforms.uTarget, density.read.attach(0));
-    gl.uniform3f(splatProgram.uniforms.color, color.r, color.g, color.b);
-    blit(density.write.fbo);
-    density.swap();
+    if (color.r > 0)
+    {
+        gl.viewport(0, 0, dyeWidth, dyeHeight);
+        gl.uniform1i(splatProgram.uniforms.uTarget, density.read.attach(0));
+        gl.uniform3f(splatProgram.uniforms.color, color.r, color.g, color.b);
+        blit(density.write.fbo);
+        density.swap();
+        }
 }
 
 function multipleSplats (amount) {
@@ -1315,10 +1326,10 @@ function multipleSplats (amount) {
         color.r *= 10.0;
         color.g *= 10.0;
         color.b *= 10.0;
-        const x = canvas.width * Math.random();
-        const y = canvas.height * Math.random();
-        const dx = 1000 * (Math.random() - 0.5);
-        const dy = 1000 * (Math.random() - 0.5);
+        const x = canvas.width * 0.5;
+        const y = canvas.height * 0.1;
+        const dx = 0.0;
+        const dy = - 1000 * 0.1;
         splat(x, y, dx, dy, color);
     }
 }
@@ -1388,11 +1399,11 @@ window.addEventListener('keydown', e => {
     if (e.code === 'KeyP')
         config.PAUSED = !config.PAUSED;
     if (e.key === ' ')
-        splatStack.push(parseInt(Math.random() * 20) + 5);
+        splatStack.push(parseInt(20) + 5);
 });
 
 function generateColor () {
-    let c = HSVtoRGB(Math.random(), 1.0, 1.0);
+    let c = HSVtoRGB(0.1, 1.0, 1.0);
     c.r *= 0.15;
     c.g *= 0.15;
     c.b *= 0.15;
